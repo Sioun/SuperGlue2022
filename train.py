@@ -12,6 +12,8 @@ from torch.autograd import Variable
 # Datasets
 from sift_dataset import SIFTDataset
 from superpoint_dataset import SuperPointDataset
+from datasets.superpoint_gauss2_dataset import SuperPoint_Guass2_Dataset
+from datasets.superpoint_tuned_dataset import SuperPointTunedDataset
 
 import os
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
@@ -58,7 +60,7 @@ parser.add_argument(
             ' (requires ground truth pose and intrinsics)')
 
 parser.add_argument(
-    '--detector', choices={'superpoint', 'sift'}, default='superpoint',
+    '--detector', choices={'superpoint', 'sift','superpoint_gauss2'}, default='superpoint_gauss2',
     help='Keypoint detector')
 parser.add_argument(
     '--superglue', choices={'indoor', 'outdoor'}, default='indoor',
@@ -82,7 +84,7 @@ parser.add_argument(
     help='SuperGlue match threshold')
 
 parser.add_argument(
-    '--resize', type=int, nargs='+', default=[640, 480],
+    '--resize', type=int, nargs='+', default=[472, 472],
     help='Resize the input image before running inference. If two numbers, '
             'resize to the exact dimensions, if one number, resize the max '
             'dimension, if -1, do not resize')
@@ -132,7 +134,7 @@ parser.add_argument(
     '--batch_size', type=int, default=1,
     help='batch_size')
 parser.add_argument(
-    '--train_path', type=str, default='E:\\2021-2022 Msc\dataset\coco2014\\train2014',
+    '--train_path', type=str, default='E:\\2021-2022 Msc\dataset\SyntheticColon_I',
     help='Path to the directory of training imgs.')
 # parser.add_argument(
 #     '--nfeatures', type=int, default=1024,
@@ -167,10 +169,16 @@ if __name__ == '__main__':
     detector_dims = {
         'superpoint': 256,
         'sift': 128,
+        'superpoint_gauss2':256
     }
 
     config = {
         'superpoint': {
+            'nms_radius': opt.nms_radius,
+            'keypoint_threshold': opt.keypoint_threshold,
+            'max_keypoints': opt.max_keypoints,
+        },
+        'superpoint_gauss2': {
             'nms_radius': opt.nms_radius,
             'keypoint_threshold': opt.keypoint_threshold,
             'max_keypoints': opt.max_keypoints,
@@ -184,7 +192,7 @@ if __name__ == '__main__':
             'match_threshold': opt.match_threshold,
             'descriptor_dim': detector_dims[opt.detector],
             'GNN_layers': ['self', 'cross'] * 9
-        },
+        }
     }
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -194,6 +202,8 @@ if __name__ == '__main__':
         train_set = SuperPointDataset(opt.train_path, device=device, superpoint_config=config.get('superpoint', {}))
     elif opt.detector == 'sift':
         train_set = SIFTDataset(opt.train_path, nfeatures=opt.max_keypoints)
+    elif opt.detector == 'superpoint_gauss2':
+        train_set = SuperPoint_Guass2_Dataset(opt.train_path, device=device, superpoint_config=config.get('superpoint_gauss2', {}))
     else:
         RuntimeError('Error detector : {}'.format(opt.detector))
 
@@ -286,7 +296,7 @@ if __name__ == '__main__':
                     opt.fast_viz, opt.opencv_display, 'Matches')
 
             if (i+1) % 1000 == 0:
-                model_out_path = "C:/SuperGlue/SuperGlue-master/SuperGlue-master/models/new_weights/superglue_reproduced_5999+{}.pth".format(i)
+                model_out_path = "logs/superglue_indoor_{}.pth".format(i)
                 torch.save(superglue.state_dict(), model_out_path)
                 print ('Epoch [{}/{}], Step [{}/{}], Checkpoint saved to {}' 
                     .format(epoch, opt.epoch, i+1, len(train_loader), model_out_path)) 

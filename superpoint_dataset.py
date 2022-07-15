@@ -24,7 +24,7 @@ class SuperPointDataset(Dataset):
 
         print('Using SuperPoint dataset')
 
-        self.DEBUG = False
+        self.DEBUG = True
         self.image_path = image_path
         self.device = device
 
@@ -62,6 +62,8 @@ class SuperPointDataset(Dataset):
         kps0 = pred0['keypoints'][0]
         desc0 = pred0['descriptors'][0]
         scores0 = pred0['scores'][0]
+        print('test for kp:', kps0)
+        print('test for score:', scores0)
         if self.DEBUG: print(f'Original keypoints: {kps0.shape}, descriptors: {desc0.shape}, scores: {scores0.shape}')
 
         # Transform keypoints

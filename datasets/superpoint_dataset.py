@@ -62,6 +62,7 @@ class SuperPointDataset(Dataset):
         kps0 = pred0['keypoints'][0]
         desc0 = pred0['descriptors'][0]
         scores0 = pred0['scores'][0]
+        print(scores0)
         if self.DEBUG: print(f'Original keypoints: {kps0.shape}, descriptors: {desc0.shape}, scores: {scores0.shape}')
 
         # Transform keypoints

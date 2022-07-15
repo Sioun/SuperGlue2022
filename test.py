@@ -1,4 +1,7 @@
-layers = [1,2,3,4,5]
+import numpy as np
+layers = np.array([[1,2,3],
+          [4,5,6],
+          [7,8,9]])
 
-layers = [3] + layers
-print(layers)
+
+print(layers[:,0:2])

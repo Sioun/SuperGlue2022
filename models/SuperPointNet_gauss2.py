@@ -7,12 +7,23 @@ import torch.nn as nn
 from torch.nn.init import xavier_uniform_, zeros_
 from models.unet_parts import *
 import numpy as np
+from pathlib import Path
 
 # from models.SubpixelNet import SubpixelNet
 class SuperPointNet_gauss2(torch.nn.Module):
     """ Pytorch definition of SuperPoint Network. """
-    def __init__(self, subpixel_channel=1):
+
+    default_config = {
+        'descriptor_dim': 256,
+        'nms_radius': 4,
+        'keypoint_threshold': 0.005,
+        'max_keypoints': -1,
+        'remove_borders': 4,
+    }
+
+    def __init__(self,config):
         super(SuperPointNet_gauss2, self).__init__()
+        self.config = {**self.default_config, **config}
         c1, c2, c3, c4, c5, d1 = 64, 64, 128, 128, 256, 256
         det_h = 65
         self.inc = inconv(1, c1)
@@ -38,6 +49,10 @@ class SuperPointNet_gauss2(torch.nn.Module):
         self.bnDb = nn.BatchNorm2d(d1)
         self.output = None
 
+        path = Path(__file__).parent / 'weights/superPointNet_120000_checkpoint.pth.tar'
+        checkpoint = torch.load(path)
+        self.load_state_dict(checkpoint['model_state_dict'])
+        print('model:', path, 'loaded!')
 
 
     def forward(self, x):
@@ -50,24 +65,37 @@ class SuperPointNet_gauss2(torch.nn.Module):
           desc: Output descriptor pytorch tensor shaped N x 256 x H/8 x W/8.
         """
         # Let's stick to this version: first BN, then relu
-        x1 = self.inc(x)
+        x4 = self.encode(x)
+
+        # # Detector Head.
+        # cPa = self.relu(self.bnPa(self.convPa(x4)))
+        # semi = self.bnPb(self.convPb(cPa))
+        # # Descriptor Head.
+        # cDa = self.relu(self.bnDa(self.convDa(x4)))
+        # desc = self.bnDb(self.convDb(cDa))
+
+        keypoints, scores = self.extract_keypoints(x4)
+        descriptors = self.compute_descriptors(x4, keypoints)
+
+        return {
+            'keypoints': keypoints,
+            'scores': scores,
+            'descriptors': descriptors,
+        }
+
+        # dn = torch.norm(desc, p=2, dim=1) # Compute the norm.
+        # desc = desc.div(torch.unsqueeze(dn, 1)) # Divide by norm to normalize.
+        # output = {'semi': semi, 'desc': desc}
+        # self.output = output
+        # return output
+
+    def encode(self, data):
+        # Shared Encoder
+        x1 = self.inc(data['image'])
         x2 = self.down1(x1)
         x3 = self.down2(x2)
         x4 = self.down3(x3)
-
-        # Detector Head.
-        cPa = self.relu(self.bnPa(self.convPa(x4)))
-        semi = self.bnPb(self.convPb(cPa))
-        # Descriptor Head.
-        cDa = self.relu(self.bnDa(self.convDa(x4)))
-        desc = self.bnDb(self.convDb(cDa))
-
-        dn = torch.norm(desc, p=2, dim=1) # Compute the norm.
-        desc = desc.div(torch.unsqueeze(dn, 1)) # Divide by norm to normalize.
-        output = {'semi': semi, 'desc': desc}
-        self.output = output
-
-        return output
+        return x4
 
     def process_output(self, sp_processer):
         """
@@ -97,6 +125,69 @@ class SuperPointNet_gauss2(torch.nn.Module):
         output.update(outs)
         self.output = output
         return output
+
+    def compute_scores(self, x):
+        # Compute the dense keypoint scores
+        cPa = self.relu(self.convPa(x))
+        scores = self.convPb(cPa)
+        scores = torch.nn.functional.softmax(scores, 1)[:, :-1]
+        b, _, h, w = scores.shape
+        scores = scores.permute(0, 2, 3, 1).reshape(b, h, w, 8, 8)
+        scores = scores.permute(0, 1, 3, 2, 4).reshape(b, h*8, w*8)
+        scores = simple_nms(scores, self.config['nms_radius'])
+        return scores, h, w
+
+    def extract_keypoints(self, x):
+        scores, h, w = self.compute_scores(x)
+
+        # Extract keypoints
+        keypoints = [
+            torch.nonzero(s > self.config['keypoint_threshold'])
+            for s in scores]
+        scores = [s[tuple(k.t())] for s, k in zip(scores, keypoints)]
+
+        # Discard keypoints near the image borders
+        keypoints, scores = list(zip(*[
+            remove_borders(k, s, self.config['remove_borders'], h*8, w*8)
+            for k, s in zip(keypoints, scores)]))
+
+        # Keep the k keypoints with highest score
+        if self.config['max_keypoints'] >= 0:
+            keypoints, scores = list(zip(*[
+                top_k_keypoints(k, s, self.config['max_keypoints'])
+                for k, s in zip(keypoints, scores)]))
+
+        # Convert (h, w) to (x, y)
+        keypoints = [torch.flip(k, [1]).float() for k in keypoints]
+
+        return keypoints, scores
+
+    def compute_descriptors(self, x, keypoints):
+        # Compute the dense descriptors
+        cDa = self.relu(self.convDa(x))
+        descriptors = self.convDb(cDa)
+        descriptors = torch.nn.functional.normalize(descriptors, p=2, dim=1)
+
+        # Extract descriptors
+        descriptors = [sample_descriptors(k[None], d[None], 8)[0]
+                       for k, d in zip(keypoints, descriptors)]
+        return descriptors
+
+    def computeDescriptorsAndScores(self, data):
+        """ Compute descriptors & scores for given keypoints in data['keypoints'] """
+        x = self.encode(data)
+
+        # Compute descriptors
+        descriptors = self.compute_descriptors(x, data.get('keypoints'))
+
+        # Convert (x, y) to (h, w)
+        keypoints = [torch.flip(k, [1]).long() for k in data.get('keypoints')]
+
+        # Compute scores
+        scores, _, _ = self.compute_scores(x)
+        scores = [s[tuple(k.t())] for s, k in zip(scores, keypoints)]
+
+        return descriptors, scores
 
 
 def get_matches(deses_SP):
@@ -132,6 +223,50 @@ def get_matches(deses_SP):
         
     # pts_idx_res = torch.cat((pts_m, pts_m_res), dim=1)
     # print("pts_idx_res: ", pts_idx_res.shape)
+
+def simple_nms(scores, nms_radius: int):
+    """ Fast Non-maximum suppression to remove nearby points """
+    assert(nms_radius >= 0)
+
+    def max_pool(x):
+        return torch.nn.functional.max_pool2d(
+            x, kernel_size=nms_radius*2+1, stride=1, padding=nms_radius)
+
+    zeros = torch.zeros_like(scores)
+    max_mask = scores == max_pool(scores)
+    for _ in range(2):
+        supp_mask = max_pool(max_mask.float()) > 0
+        supp_scores = torch.where(supp_mask, zeros, scores)
+        new_max_mask = supp_scores == max_pool(supp_scores)
+        max_mask = max_mask | (new_max_mask & (~supp_mask))
+    return torch.where(max_mask, scores, zeros)
+
+def remove_borders(keypoints, scores, border: int, height: int, width: int):
+    """ Removes keypoints too close to the border """
+    mask_h = (keypoints[:, 0] >= border) & (keypoints[:, 0] < (height - border))
+    mask_w = (keypoints[:, 1] >= border) & (keypoints[:, 1] < (width - border))
+    mask = mask_h & mask_w
+    return keypoints[mask], scores[mask]
+
+def top_k_keypoints(keypoints, scores, k: int):
+    if k >= len(keypoints):
+        return keypoints, scores
+    scores, indices = torch.topk(scores, k, dim=0)
+    return keypoints[indices], scores
+
+def sample_descriptors(keypoints, descriptors, s: int = 8):
+    """ Interpolate descriptors at keypoint locations """
+    b, c, h, w = descriptors.shape
+    keypoints = keypoints - s / 2 + 0.5
+    keypoints /= torch.tensor([(w*s - s/2 - 0.5), (h*s - s/2 - 0.5)],
+                              ).to(keypoints)[None]
+    keypoints = keypoints*2 - 1  # normalize to (-1, 1)
+    args = {'align_corners': True} if int(torch.__version__[2]) > 2 else {}
+    descriptors = torch.nn.functional.grid_sample(
+        descriptors, keypoints.view(b, 1, -1, 2), mode='bilinear', **args)
+    descriptors = torch.nn.functional.normalize(
+        descriptors.reshape(b, c, -1), p=2, dim=1)
+    return descriptors
 
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
