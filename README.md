@@ -26,6 +26,33 @@ https://www.synapse.org/#!Synapse:syn28548633/wiki/617130
 
 which needs the permission of the owner, so please first apply on the web page.
 
+The folder structure should look like (use SyntheticColon_I as example):
+```
+datasets/ ($DATA_DIR)
+`-- SyntheticColon_I (accumulated folders from raw data)
+|   |-- Frames_S1
+|   |   |-- Depth_0000.png/
+|   |   |-- ...
+|   `-- Frames_S2
+|   |   |-- Depth_0000.png/
+|   |   |-- ...
+...
+|   |-- Frames_S14
+|   |   |-- Depth_0000.png/
+|   |   |-- ...
+|   |SavedPosition_S1.txt
+|   |SavedPosition_S2.txt
+...
+|   |SavedPosition_S14.txt
+|   |SavedRotationQuaternion_S1.txt
+|   |SavedRotationQuaternion_S2.txt
+...
+|   |SavedRotationQuaternion_S14.txt
+|   |train.txt
+|   |val.txt
+
+```
+
 ## Contents
 There are one main top-level scripts in this repo:
 
